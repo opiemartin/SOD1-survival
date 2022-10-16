@@ -1,0 +1,285 @@
+##########################################################
+##################SOD1 Survival Project###################
+##########################################################
+
+setwd("")
+
+packages <- c("dplyr","forestplot","ggplot2","survival")
+lapply(packages, library, character.only = TRUE)
+
+
+#### CODE FOR COX PROPORTIONAL HAZARDS REGRESSION MODELS ####
+
+#### COX PH FOR DISEASE DURATION
+
+### load data
+joint_surv <- read.csv("FILENAME.csv")
+
+### joint_surv consists of a dataset with the following fields:
+## Corrected-AA_Change: cleaned amino acid substitution label or that data are from comparator dataset
+## Gender: male or female
+## Site_onsetBS: onset defined as bulbar or spinal
+## age_onset: age of onset in years
+## disease_duration: duration of disease from onset to death or censor in months
+## status: binary status of deceased or censored
+## fake: categorical variable used to nest dataset in loop
+
+# define empty variables to create final matrix
+output_table_ALS_only <-  NULL
+output_roystons_d <- NULL
+variant_output <- NULL
+
+### Loop through the variants in the datasets and for each variant compare survival to the comparator dataset
+
+for (variant in unique(joint_surv$Corrected_AA_Change)) {
+  
+  strength_coxph_mod <- joint_surv %>%
+    filter(Corrected_AA_Change == "compartor" | Corrected_AA_Change == variant) %>%
+    droplevels() %>%
+    mutate(Corrected_AA_Change = factor(Corrected_AA_Change)) %>%
+    {. ->> intermediateResult} %>% 
+    nest_by(fake) %>%
+    mutate(cfit = list(coxph(Surv(disease_duration, status) ~ Corrected_AA_Change + Gender + Site_onsetBS + age_onset, 
+                             data=intermediateResult)))
+  
+  model_summary <- tidy(strength_coxph_mod$cfit[[1]], exponentiate = T, conf.int=T)
+  royston_d <- royston(strength_coxph_mod$cfit[[1]])
+  
+  output_table_ALS_only <- rbind(output_table_ALS_only, model_summary)
+  variant_output <- rbind(variant_output,paste(variant))
+  output_roystons_d <- rbind(output_roystons_d, royston_d)
+  
+  
+}
+
+output_table_ALS_only <- output_table_ALS_only %>% 
+  filter(grepl("Corrected", term)) %>%
+  mutate(
+    significant = case_when(p.value < 0.00082 ~ "Significant"),
+    term = str_replace(term, "Corrected_AA_Change", ""))
+
+ns_etc_surv <- joint_surv %>% group_by(Corrected_AA_Change) %>% 
+  summarise(n=n(),
+            mean_survival = mean(disease_duration, na.rm=T),
+            median_survival = median(disease_duration, na.rm=T)) %>%
+  mutate(codon = as.numeric(gsub('[A-Z]*','',Corrected_AA_Change)),
+         codonFact = as.factor(gsub('[A-Z]*','',Corrected_AA_Change)))
+
+roystons_d_variant <- as.data.frame(cbind(variant_output, output_roystons_d))
+
+full_tbl_pre <- left_join(output_table_ALS_only, roystons_d_variant, by=c("term"="V1"))
+full_tbl <- left_join(ns_etc_surv, full_tbl_pre, by=c("Corrected_AA_Change" = "term"))
+
+#### COX PH FOR AGE OF ONSET
+
+joint_onset <- read.csv("FILENAME.csv")
+
+### joint_onset consists of a dataset with the following fields:
+## Corrected-AA_Change: cleaned amino acid substitution label or that data are from comparator dataset
+## Gender: male or female
+## Site_onsetBS: onset defined as bulbar or spinal
+## age_onset: age of onset in years
+## status_age: all rows coded to 1 as all participants had expereicend onset
+## fake: categorical variable used to nest dataset in loop
+
+
+# define empty variables to create final matrix
+output_table_ALS_only_age <-  NULL
+output_roystons_d_age <- NULL
+variant_output_age <- NULL
+
+### Loop through the variants in the datasets and for each variant compare survival to the comparator dataset
+
+for (variant in unique(joint_age$Corrected_AA_Change)) {
+  
+  strength_coxph_mod <- joint_age %>%
+    filter(Corrected_AA_Change == "comparator" | Corrected_AA_Change == variant) %>%
+    droplevels() %>%
+    mutate(Corrected_AA_Change = factor(Corrected_AA_Change)) %>%
+    {. ->> intermediateResult} %>% 
+    nest_by(fake) %>%
+    mutate(cfit = list(coxph(Surv(age_onset, status_age) ~ Corrected_AA_Change + Gender + Site_onsetBS,
+                             data=intermediateResult)))
+  
+  model_summary <- tidy(strength_coxph_mod$cfit[[1]], exponentiate = T, conf.int=T)
+  royston_d <- royston(strength_coxph_mod$cfit[[1]])
+  
+  
+  output_table_ALS_only_age <- rbind(output_table_ALS_only_age, model_summary)
+  output_roystons_d_age <- rbind(output_roystons_d_age, royston_d)
+  variant_output_age <- rbind(variant_output_age,paste(variant))
+  
+}
+
+output_table_ALS_only_age <- output_table_ALS_only_age %>% 
+  filter(grepl("Corrected", term)) %>%
+  mutate(
+    significant = case_when(p.value < 0.0007 ~ "Significant"),
+    term = str_replace(term, "Corrected_AA_Change", ""))
+
+ns_etc_age <- joint_age %>% group_by(Corrected_AA_Change) %>% 
+  summarise(n=n(),
+            mean_survival = mean(age_onset, na.rm=T),
+            median_survival = median(age_onset, na.rm=T)) %>%
+  mutate(codon = as.numeric(gsub('[A-Z]*','',Corrected_AA_Change)),
+         codonFact = as.factor(gsub('[A-Z]*','',Corrected_AA_Change)))
+
+
+roystons_d_variant_age <- as.data.frame(cbind(variant_output_age, output_roystons_d_age))
+
+full_tbl_pre_age <- left_join(output_table_ALS_only_age, roystons_d_variant_age, by=c("term"="V1"))
+full_tbl_age <- left_join(ns_etc_age, full_tbl_pre_age, by=c("Corrected_AA_Change" = "term"))
+
+
+
+#### join the tables back together to create supplementary file 2
+full_tbl_joint <- bind_rows(full_tbl, full_tbl_age)
+write.csv(full_tbl_joint, "FILENAME.csv")
+
+####### FIGURE 2 ######
+
+
+#### Code to generate figure, data can be found in source data tables figures 2a, 2b and 2c #####
+
+age <- ggplot(jointCodon, aes(fct_reorder(label, codon),age_onset,fill=colour_age)) + 
+  geom_boxplot(alpha=0.8, outlier.shape=NA) +
+  scale_fill_manual(values=c("white","#808080")) +
+  geom_jitter(alpha=0.5)+
+  labs(title="A)", x="Variant", y="Age of onset (years)") + 
+  scale_color_manual(values=c("Grey", "Black"))+
+  scale_y_continuous(limits=c(0,100)) +
+  theme(panel.background = element_rect(fill = 'white'), panel.grid.major.y = element_line(),
+        panel.grid.major.x = element_line(),
+        axis.line = element_line(colour = "black"),
+        plot.title = element_text(size=12),
+        legend.position = "none",
+        legend.title = element_text(size=12),
+        legend.text = element_text(size=12),
+        axis.title.x = element_text(size=12),
+        axis.title.y = element_text(size=12),
+        axis.text.x = element_text(size=9, angle = 90, vjust = 0.5, hjust=1),
+        axis.text.y = element_text(size=12),
+        panel.spacing = unit(0, "lines"),
+        strip.background = element_blank(),
+        strip.placement = "outside"
+  )
+
+surv <- ggplot(jointCodon, aes(fct_reorder(label, codon),y=disease_duration,fill=colour_surv)) + 
+  geom_boxplot(alpha=0.8, outlier.shape=NA) +
+  scale_fill_manual(values=c("white","#808080")) +
+  geom_jitter(alpha=0.5)+
+  labs(title="B)", x="Variant", y="Lg disease duration (months)") + 
+  scale_color_manual(values=c("Black", "Yellow"))+
+  scale_y_log10() +
+  theme(panel.background = element_rect(fill = 'white'), panel.grid.major.y = element_line(),
+        panel.grid.major.x = element_line(),
+        axis.line = element_line(colour = "black"),
+        plot.title = element_text(size=12),
+        legend.position = "none",
+        legend.title = element_text(size=12),
+        legend.text = element_text(size=12),
+        axis.title.x = element_text(size=12),
+        axis.title.y = element_text(size=12),
+        axis.text.x = element_text(size=9, angle = 90, vjust = 0.5, hjust=1),
+        axis.text.y = element_text(size=12),
+        panel.spacing = unit(0, "lines"),
+        strip.background = element_blank(),
+        strip.placement = "outside"
+  )
+
+codons5and42 <- filter(jointCodon, codon==5 | codon==42 | codon ==91 | codon==94) %>%
+  mutate(label = paste0("Codon ", codon, sep="")) 
+codons5and42$label <-  as.factor(codons5and42$label)
+codons5and42$label <-  factor(codons5and42$label, levels = c("Codon 5", "Codon 42", "Codon 91", "Codon 94"))
+
+surv_5_42 <- ggplot(codons5and42, aes(Corrected_AA_Change,y=disease_duration, fill=colour_surv)) + 
+  geom_boxplot(alpha=0.8, outlier.shape=NA) +
+  facet_grid(. ~ label, scales="free") +
+  scale_fill_manual(values=c("white","#808080"), name="p-value (multivariate CoxPH)") +
+  geom_jitter(alpha=0.5)+
+  labs(title="C)", x="Variant", y="Lg disease duration (months)") + 
+  scale_color_manual(values=c("Grey", "Black"))+
+  scale_y_log10() +
+  theme_bw() +
+  theme(panel.grid.major.y = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.background = element_blank())
+
+fig2 <- grid.arrange(arrangeGrob(age, surv, surv_5_42, nrow=3))
+ggsave("FIGURE 2.tiff", plot=fig2, width = 18, height = 21, device='tiff', dpi=300, units="cm")
+
+
+###### FIGURES 3 AND 4 #####
+
+### code utilisies data in Source Data file tables figures 3 and 4
+
+own <- fpTxtGp(ticks = gpar(cex=0.55), label=gpar(cex=0.5), xlab=gpar(cex=0.5))
+
+# rename headings for forest plot function
+fp_data_onset <- 
+  structure(list(
+    mean  = c(NA, forest_data_onset$estimate),
+    lower = c(NA,forest_data_onset$conf.low),
+    upper = c(NA,forest_data_onset$conf.high)), 
+    .Names = c("mean", "lower", "upper"), 
+    row.names = c(NA, -18L), 
+    class = "data.frame")
+
+
+tabletext_onset<-cbind(
+  c("Variant", forest_data_onset$Corrected_AA_Change),
+  c("n", forest_data_onset$n),
+  c("Median age (years)",forest_data_onset$median_tidy),
+  c("HR (95% CI)", forest_data_onset$HR_tidy), 
+  c("p-value", forest_data_onset$p_tidy))
+
+tiff("FIGURE 3.tiff", units = "cm", width = 18, height = 22, res = 300)
+forestplot(tabletext_onset, 
+           fp_data_onset,new_page = TRUE,
+           is.summary=c(TRUE,rep(FALSE,17)),
+           lineheight = unit(0.5, "cm"),
+           graphwidth=unit(6, "cm"),
+           boxsize=c(rep(0.2,18),1),
+           txt_gp = own,
+           xlog=TRUE,
+           xlab="Hazard ratio",
+           zero =1,
+           xticks = c(0.1,1,5,60),
+           #clip=c(0,2), 
+           col=fpColors(box="black",line="black", summary="black"))
+dev.off()
+
+fp_data_surv <- 
+  structure(list(
+    mean  = c(NA, forest_data_surv$estimate), 
+    lower = c(NA,forest_data_surv$conf.low),
+    upper = c(NA,forest_data_surv$conf.high)), 
+    .Names = c("mean", "lower", "upper"), 
+    row.names = c(NA, -11L), 
+    class = "data.frame")
+
+tabletext_surv<-cbind(
+  c("Variant", forest_data_surv$Corrected_AA_Change),
+  c("n", forest_data_surv$n),
+  c("Disease duration (months)",forest_data_surv$median_survival),
+  c("HR (95% CI)", forest_data_surv$HR_tidy), 
+  c("p-value", forest_data_surv$p_tidy))
+
+tiff("FIIGURE 4.tiff", units = "cm", width = 18, height = 22, res = 300)
+forestplot(tabletext_surv, 
+           fp_data_surv,new_page = TRUE,
+           is.summary=c(TRUE,rep(FALSE,10)),
+           lineheight = unit(0.5, "cm"),
+           graphwidth=unit(6, "cm"),
+           boxsize=c(rep(0.2,10),1),
+           txt_gp = own,
+           xlog=TRUE,
+           xlab="Hazard ratio",
+           zero =1,
+           xticks = c(0.1,1,5,30),
+           #clip=c(0,2), 
+           col=fpColors(box="black",line="black", summary="black"))
+
+dev.off()
